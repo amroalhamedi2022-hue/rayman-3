@@ -1,0 +1,65 @@
+name: Android ARM64 native audio candidate
+on:
+  pull_request:
+    branches: [feature/readvanced-android-first]
+    paths:
+      - 'native/**'
+      - '.github/workflows/android-native-audio.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-audio-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  soloud-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned upstream sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/jarikomppa/soloud.git "$RUNNER_TEMP/soloud"
+          git -C "$RUNNER_TEMP/soloud" checkout --detach e82fd32c1f62183922f08c14c814a02b58db1873
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+      - name: Resolve pinned Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="$ANDROID_HOME/ndk/28.2.13676358"
+          if [ ! -f "$ndk/build/cmake/android.toolchain.cmake" ]; then
+            sdkmanager "ndk;28.2.13676358"
+          fi
+          test -f "$ndk/build/cmake/android.toolchain.cmake"
+          echo "PINNED_NDK=$ndk" >> "$GITHUB_ENV"
+      - name: Compile real SoLoud ARM64 shared library
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S native -B "$RUNNER_TEMP/audio-build" -G Ninja \
+            -DSOLOUD_SOURCE="$RUNNER_TEMP/soloud" \
+            -DCMAKE_TOOLCHAIN_FILE="$PINNED_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-23 \
+            -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/audio-build" --parallel 2
+      - name: Inspect ABI and actual exported symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$PINNED_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          python3 native/check_exports.py \
+            --library "$RUNNER_TEMP/audio-build/libsoloud.so" \
+            --wrapper "$RUNNER_TEMP/readvanced/src/GbaMonoGame.Native/Soloud.cs" \
+            --nm "$bin/llvm-nm" --readelf "$bin/llvm-readelf" \
+            --report "$RUNNER_TEMP/soloud-abi.json"
+      - name: Preserve native ABI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-abi-diagnostics
+          path: ${{ runner.temp }}/soloud-abi.json
+          if-no-files-found: ignore
+          retention-days: 7
