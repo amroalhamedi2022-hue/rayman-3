@@ -95,7 +95,7 @@ public sealed class AndroidGameHost : AndroidGameActivity
             await PrivateRomStore.ImportAsync(snapshot,UserData,expected,lifetime.Token);
             message="ROM imported and validated. Source file was not modified.";
         }
-        catch(OperationCanceledException){message="Import cancelled.";}
+        catch(System.OperationCanceledException){message="Import cancelled.";}
         catch(Exception ex){message="ROM import failed: "+ex.Message;}
         finally { if(File.Exists(stage))File.Delete(stage);busy=false; }
         if(!IsDestroyed)Refresh(message);
