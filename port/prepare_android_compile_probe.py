@@ -76,6 +76,8 @@ def main():
     adapt(src)
     from prepare_android_runtime import adapt_runtime
     adapt_runtime(src)
+    from prepare_android_host import adapt_host
+    adapt_host(src)
     print("Prepared existing Readvanced libraries for Android compiler diagnostics.")
     print("No content or runtime test has been performed.")
 
