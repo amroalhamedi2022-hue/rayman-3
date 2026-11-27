@@ -1,0 +1,71 @@
+name: Readvanced Android verification
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'port/**'
+      - '.github/workflows/readvanced-port-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: readvanced-port-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  component-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Checkout pinned public upstream
+        run: |
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
+      - name: Validate patch and run real C# component tests
+        run: |
+          python3 port/apply_port_input.py --self-test
+          python3 port/run-stage02-checks.py --checkout "$RUNNER_TEMP/readvanced"
+      - name: Apply hook against actual pinned source
+        run: |
+          python3 port/apply_port_input.py --checkout "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" diff --check
+          git -C "$RUNNER_TEMP/readvanced" status --short
+  android-compile-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android workload
+        run: dotnet workload install android
+      - name: Checkout pinned public upstream
+        run: |
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
+      - name: Retarget engine libraries without gameplay changes
+        run: python3 port/prepare_android_compile_probe.py --checkout "$RUNNER_TEMP/readvanced"
+      - name: Compile Android engine candidate (diagnostics, not an APK)
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/readvanced/src"
+          dotnet build GbaMonoGame.Rayman3/GbaMonoGame.Rayman3.csproj -f net10.0-android -c Release -p:AndroidSdkDirectory="$ANDROID_HOME" --verbosity minimal 2>&1 | tee "$RUNNER_TEMP/android-compile.log"
+      - name: Preserve compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-compile-diagnostics
+          path: ${{ runner.temp }}/android-compile.log
+          if-no-files-found: ignore
+          retention-days: 7

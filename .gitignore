@@ -1,0 +1,25 @@
+# Never commit original game files or private artwork.
+*.gba
+*.gbc
+*.rom
+*.sav
+*.srm
+*.app
+*.dat
+*.apk
+*.aab
+*.zip
+*.7z
+*.png
+*.wav
+*.sf2
+*.xnb
+*.jks
+*.keystore
+UserData/
+Assets/
+upstream/
+bin/
+obj/
+__pycache__/
+*.log
