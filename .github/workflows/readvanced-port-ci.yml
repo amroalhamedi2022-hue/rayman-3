@@ -53,6 +53,8 @@ jobs:
           git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
           git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
           git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
+      - name: Inventory upstream native dependencies
+        run: python3 port/audit_native_abi.py --checkout "$RUNNER_TEMP/readvanced" | tee "$RUNNER_TEMP/native-abi.json"
       - name: Retarget engine libraries without gameplay changes
         run: python3 port/prepare_android_compile_probe.py --checkout "$RUNNER_TEMP/readvanced"
       - name: Pack pinned upstream native interop dependency
@@ -75,6 +77,53 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-compile-diagnostics
-          path: ${{ runner.temp }}/android-compile.log
+          path: |
+            ${{ runner.temp }}/android-compile.log
+            ${{ runner.temp }}/native-abi.json
+          if-no-files-found: ignore
+          retention-days: 7
+  android-content-probe:
+    # MGFXC needs Direct3D's shader compiler on Windows. Build the Android target,
+    # not Windows shaders. Do not upload the original content or resulting XNB files.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install pinned MGCB
+        shell: pwsh
+        run: dotnet tool install dotnet-mgcb --version 3.8.4.1 --tool-path "$env:RUNNER_TEMP/mgcb"
+      - name: Checkout upstream
+        shell: pwsh
+        run: |
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$env:RUNNER_TEMP/readvanced"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C "$env:RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile original Android content on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = 0
+          foreach ($project in @('GbaMonoGame','GbaMonoGame.TgxEngine','GbaMonoGame.Rayman3')) {
+            $dir = Join-Path "$env:RUNNER_TEMP/readvanced/src" "$project/Assets"
+            $mgcb = Join-Path $dir "Assets.mgcb"
+            $out = Join-Path "$env:RUNNER_TEMP" "content-$project"
+            $obj = Join-Path "$env:RUNNER_TEMP" "content-obj-$project"
+            Push-Location $dir
+            try {
+              & "$env:RUNNER_TEMP/mgcb/mgcb.exe" "/@:$mgcb" "/platform:Android" "/outputDir:$out" "/intermediateDir:$obj" "/workingDir:$dir" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/content-$project.log"
+              if ($LASTEXITCODE -ne 0) { $failed = 1 }
+            } finally { Pop-Location }
+          }
+          exit $failed
+      - name: Preserve content build logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-content-diagnostics
+          path: ${{ runner.temp }}/content-*.log
           if-no-files-found: ignore
           retention-days: 7

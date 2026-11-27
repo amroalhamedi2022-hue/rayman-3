@@ -34,7 +34,7 @@ def retarget_project(path):
         ET.SubElement(props, name).text = value
     for group in root.findall("ItemGroup"):
         for node in list(group):
-            if node.tag == "PackageReference" and node.get("Include") in DESKTOP:
+            if node.tag == "PackageReference" and node.get("Include") in (DESKTOP | {"MonoGame.Content.Builder.Task"}):
                 group.remove(node)
             elif node.tag == "MonoGameContentReference":
                 group.remove(node)
@@ -74,6 +74,8 @@ def main():
     # Only Android-specific platform adapters; desktop paths remain intact.
     from prepare_android_platform import adapt
     adapt(src)
+    from prepare_android_runtime import adapt_runtime
+    adapt_runtime(src)
     print("Prepared existing Readvanced libraries for Android compiler diagnostics.")
     print("No content or runtime test has been performed.")
 
