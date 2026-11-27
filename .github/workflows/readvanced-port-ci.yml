@@ -55,6 +55,15 @@ jobs:
           git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
       - name: Retarget engine libraries without gameplay changes
         run: python3 port/prepare_android_compile_probe.py --checkout "$RUNNER_TEMP/readvanced"
+      - name: Pack pinned upstream native interop dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/readvanced/src"
+          mkdir -p nuget-artifacts
+          dotnet pack GbaMonoGame.Native/GbaMonoGame.Native.csproj -c Release -p:GeneratePackageOnBuild=false -o "$PWD/nuget-artifacts"
+          test -f nuget-artifacts/GbaMonoGame.Native.1.0.0.nupkg
+          echo "Managed native interop package present. This does not establish Android native ABI compatibility."
       - name: Compile Android engine candidate (diagnostics, not an APK)
         shell: bash
         run: |

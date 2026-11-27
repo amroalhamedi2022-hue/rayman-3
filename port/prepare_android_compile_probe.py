@@ -71,6 +71,9 @@ def main():
     save(root, packages)
     for path in paths:
         retarget_project(path)
+    # Only Android-specific platform adapters; desktop paths remain intact.
+    from prepare_android_platform import adapt
+    adapt(src)
     print("Prepared existing Readvanced libraries for Android compiler diagnostics.")
     print("No content or runtime test has been performed.")
 
