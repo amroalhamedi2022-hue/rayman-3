@@ -28,6 +28,8 @@ jobs:
       - name: Validate patch and run real C# component tests
         run: |
           python3 port/apply_port_input.py --self-test
+          python3 port/compare_trace.py --self-test
+          python3 port/verify_android_package.py --self-test
           python3 port/run-stage02-checks.py --checkout "$RUNNER_TEMP/readvanced"
       - name: Apply hook against actual pinned source
         run: |
