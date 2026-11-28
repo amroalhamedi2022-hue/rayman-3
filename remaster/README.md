@@ -1,0 +1,10 @@
+# Faithful HD remaster — not a vanilla port
+Replace every visible original texture, preserving silhouette, palettes, geometry, animation timing, gameplay and source behavior. Android is the platform, Readvanced is reused logic, not the visual product.
+
+## First slice
+Exact GBA sprite occurrence identity: ROM SHA-256 namespace, resource/palette file offsets, animation, frame, channel, tile, shape, size, palette index and bit depth. Private reviewed full-canvas RGBA PNGs, source RGBA verification, uniform 2x–16x resolution scale, 2048px texture cap, 96 MiB scene cache. Original position, flip, rotation, affine rounding, priority and alpha retained by design; GPU proof pending.
+Optional local capture via UserData/Remaster/capture.enabled emits observed unique occurrence JSONL and exact unflipped RGBA sources for eligible static palettes. 100k record / 128 MiB source-data limits. It does NOT constitute complete inventory; requires actual game traversal. All captured data stays private.
+UserData/Remaster/manifest.json: schema:1, rom_sha256 (lowercase), entries array. Entry: key, logical_width, logical_height, texture_width, texture_height, png_sha256, source_sha256, review_sha256, approved:true. PNG stored as textures/<png_sha256>.png, RGBA8 and full registered original canvas including transparent padding. Review must explicitly cover native registration and occurrence. Metadata is a local trust input, not a cryptographic signature. Never infer approval from master art alone.
+Development fallback is not remastered coverage. No approved runtime textures bundled. Existing private masters, OAM evidence, approvals and map work remain unchanged.
+## Remaining
+Tilekit/tilesets, animated tiles, chunked maps and backgrounds; direct content, font, HUD/menus, cutscenes, procedural effects/fog, palette-cycle and Mode7/mesh UV paths. Static scan identifies code routes, not all textures. Release requires explicit full traversal/source inventory, zero unresolved/fallback keys, reviewed native registration and actual device image comparison. No claim of runtime art integration or playable HD APK.

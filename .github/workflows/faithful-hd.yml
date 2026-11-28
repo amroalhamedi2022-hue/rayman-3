@@ -1,0 +1,75 @@
+name: Faithful HD texture engine
+on:
+  pull_request:
+    branches: [feature/readvanced-android-first]
+    paths:
+      - 'remaster/**'
+      - '.github/workflows/faithful-hd.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: faithful-hd-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  geometry-and-source-decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Compile and test actual geometry and sprite decoder
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet new console --framework net10.0 --output "$RUNNER_TEMP/geometry"
+          rm "$RUNNER_TEMP/geometry/Program.cs"
+          cp remaster/{HdGeometry.cs,HdSpriteDecode.cs,GeometryChecks.cs} "$RUNNER_TEMP/geometry/"
+          dotnet run --project "$RUNNER_TEMP/geometry" -c Release
+  hd-engine-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: dotnet workload install android
+      - name: Checkout exact upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
+      - name: Audit rendering paths before patching
+        run: python3 remaster/audit_render_paths.py --checkout "$RUNNER_TEMP/readvanced" --out "$RUNNER_TEMP/render-paths.json"
+      - name: Apply tested Android foundation and HD engine
+        run: |
+          python3 port/prepare_android_compile_probe.py --checkout "$RUNNER_TEMP/readvanced"
+          python3 remaster/prepare_remaster.py --checkout "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" diff --check
+      - name: Compile HD engine without APK or game assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/readvanced/src"
+          mkdir -p nuget-artifacts
+          dotnet pack GbaMonoGame.Native/GbaMonoGame.Native.csproj -c Release -p:GeneratePackageOnBuild=false -o "$PWD/nuget-artifacts"
+          dotnet build GbaMonoGame.Rayman3/GbaMonoGame.Rayman3.csproj -f net10.0-android -c Release -p:AndroidSdkDirectory="$ANDROID_HOME" --verbosity minimal 2>&1 | tee "$RUNNER_TEMP/hd-compile.log"
+      - name: Keep code-only diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: faithful-hd-diagnostics
+          path: |
+            ${{ runner.temp }}/render-paths.json
+            ${{ runner.temp }}/hd-compile.log
+          if-no-files-found: ignore
+          retention-days: 7
