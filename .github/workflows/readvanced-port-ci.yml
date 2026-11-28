@@ -1,0 +1,136 @@
+name: Readvanced Android verification
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'port/**'
+      - '.github/workflows/readvanced-port-ci.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: readvanced-port-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  component-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Checkout pinned public upstream
+        run: |
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
+      - name: Validate patch and run real C# component tests
+        run: |
+          python3 port/apply_port_input.py --self-test
+          python3 port/compare_trace.py --self-test
+          python3 port/verify_android_package.py --self-test
+          python3 port/run-stage02-checks.py --checkout "$RUNNER_TEMP/readvanced"
+      - name: Apply hook against actual pinned source
+        run: |
+          python3 port/apply_port_input.py --checkout "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" diff --check
+          git -C "$RUNNER_TEMP/readvanced" status --short
+  android-compile-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android workload
+        run: dotnet workload install android
+      - name: Checkout pinned public upstream
+        run: |
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          git -C "$RUNNER_TEMP/readvanced" submodule update --init --recursive
+      - name: Inventory upstream native dependencies
+        run: python3 port/audit_native_abi.py --checkout "$RUNNER_TEMP/readvanced" | tee "$RUNNER_TEMP/native-abi.json"
+      - name: Retarget engine libraries without gameplay changes
+        run: python3 port/prepare_android_compile_probe.py --checkout "$RUNNER_TEMP/readvanced"
+      - name: Pack pinned upstream native interop dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/readvanced/src"
+          mkdir -p nuget-artifacts
+          dotnet pack GbaMonoGame.Native/GbaMonoGame.Native.csproj -c Release -p:GeneratePackageOnBuild=false -o "$PWD/nuget-artifacts"
+          test -f nuget-artifacts/GbaMonoGame.Native.1.0.0.nupkg
+          echo "Managed native interop package present. This does not establish Android native ABI compatibility."
+      - name: Compile Android engine candidate (diagnostics, not an APK)
+        shell: bash
+        run: |
+          set -o pipefail
+          cd "$RUNNER_TEMP/readvanced/src"
+          dotnet build GbaMonoGame.Rayman3/GbaMonoGame.Rayman3.csproj -f net10.0-android -c Release -p:AndroidSdkDirectory="$ANDROID_HOME" --verbosity minimal 2>&1 | tee "$RUNNER_TEMP/android-compile.log"
+      - name: Preserve compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-compile-diagnostics
+          path: |
+            ${{ runner.temp }}/android-compile.log
+            ${{ runner.temp }}/native-abi.json
+          if-no-files-found: ignore
+          retention-days: 7
+  android-content-probe:
+    # MGFXC needs Direct3D's shader compiler on Windows. Build the Android target,
+    # not Windows shaders. Do not upload the original content or resulting XNB files.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install pinned MGCB
+        shell: pwsh
+        run: dotnet tool install dotnet-mgcb --version 3.8.4.1 --tool-path "$env:RUNNER_TEMP/mgcb"
+      - name: Checkout upstream
+        shell: pwsh
+        run: |
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$env:RUNNER_TEMP/readvanced"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git -C "$env:RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile original Android content on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = 0
+          foreach ($project in @('GbaMonoGame','GbaMonoGame.TgxEngine','GbaMonoGame.Rayman3')) {
+            $dir = Join-Path "$env:RUNNER_TEMP/readvanced/src" "$project/Assets"
+            $mgcb = Join-Path $dir "Assets.mgcb"
+            $out = Join-Path "$env:RUNNER_TEMP" "content-$project"
+            $obj = Join-Path "$env:RUNNER_TEMP" "content-obj-$project"
+            Push-Location $dir
+            try {
+              & "$env:RUNNER_TEMP/mgcb/mgcb.exe" "/@:$mgcb" "/platform:Android" "/outputDir:$out" "/intermediateDir:$obj" "/workingDir:$dir" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/content-$project.log"
+              if ($LASTEXITCODE -ne 0) { $failed = 1 }
+            } finally { Pop-Location }
+          }
+          exit $failed
+      - name: Verify private Android content layout and manifest
+        shell: pwsh
+        run: |
+          python port/stage_android_content.py --checkout "$env:RUNNER_TEMP/readvanced" --content-root "$env:RUNNER_TEMP" --output "$env:RUNNER_TEMP/staged-android-assets" | Tee-Object -FilePath "$env:RUNNER_TEMP/content-manifest.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve content build logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-content-diagnostics
+          path: ${{ runner.temp }}/content-*.log
+          if-no-files-found: ignore
+          retention-days: 7

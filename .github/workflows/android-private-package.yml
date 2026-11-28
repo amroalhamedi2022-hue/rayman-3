@@ -1,0 +1,111 @@
+name: Private Android package verification
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - '.github/workflows/android-private-package.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-private-package-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  soloud-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned public dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/jarikomppa/soloud.git "$RUNNER_TEMP/soloud"
+          git -C "$RUNNER_TEMP/soloud" checkout --detach e82fd32c1f62183922f08c14c814a02b58db1873
+          git clone --no-checkout https://github.com/RayCarrot/Rayman3Readvanced.git "$RUNNER_TEMP/readvanced"
+          git -C "$RUNNER_TEMP/readvanced" checkout --detach dd8fb6d9ea34decedc4e57d4c5deebc008b8adbd
+      - name: Resolve pinned NDK r28c
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_HOME:-/nonexistent}/ndk/28.2.13676358"
+          if [ ! -f "$ndk/build/cmake/android.toolchain.cmake" ]; then
+            archive="$RUNNER_TEMP/android-ndk-r28c-linux.zip"
+            curl --fail --location --retry 3 --output "$archive" https://dl.google.com/android/repository/android-ndk-r28c-linux.zip
+            echo "a7b54a5de87fecd125a17d54f73c446199e72a64  $archive" | sha1sum -c -
+            unzip -q "$archive" -d "$RUNNER_TEMP"
+            rm "$archive"
+            ndk="$RUNNER_TEMP/android-ndk-r28c"
+          fi
+          grep -Fx 'Pkg.Revision = 28.2.13676358' "$ndk/source.properties"
+          echo "PINNED_NDK=$ndk" >> "$GITHUB_ENV"
+      - name: Build SoLoud
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S native -B "$RUNNER_TEMP/audio-build" -G Ninja \
+            -DSOLOUD_SOURCE="$RUNNER_TEMP/soloud" \
+            -DCMAKE_TOOLCHAIN_FILE="$PINNED_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-23 \
+            -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/audio-build" --parallel 2
+      - name: Verify real ABI and check absent API references
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$PINNED_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          python3 native/check_exports.py \
+            --library "$RUNNER_TEMP/audio-build/libsoloud.so" \
+            --wrapper "$RUNNER_TEMP/readvanced/src/GbaMonoGame.Native/Soloud.cs" \
+            --source-root "$RUNNER_TEMP/readvanced/src" \
+            --nm "$bin/llvm-nm" --readelf "$bin/llvm-readelf" \
+            --report "$RUNNER_TEMP/soloud-abi.json"
+          mkdir "$RUNNER_TEMP/native-candidate"
+          cp "$RUNNER_TEMP/audio-build/libsoloud.so" "$RUNNER_TEMP/soloud-abi.json" "$RUNNER_TEMP/native-candidate/"
+      - name: Transfer standalone open-source native library only
+        uses: actions/upload-artifact@v4
+        with:
+          name: soloud-arm64-interjob
+          path: ${{ runner.temp }}/native-candidate/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Keep ABI diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-native-diagnostics
+          path: ${{ runner.temp }}/soloud-abi.json
+          if-no-files-found: ignore
+          retention-days: 7
+  private-apk:
+    needs: soloud-arm64
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android workload
+        run: dotnet workload install android
+      - uses: actions/download-artifact@v4
+        with:
+          name: soloud-arm64-interjob
+          path: ${{ runner.temp }}/native-candidate
+      - name: Assemble, compile and inspect a private package
+        shell: pwsh
+        run: ./native/build-package-probe.ps1
+      - name: Preserve diagnostics only (never APK or game assets)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-package-diagnostics
+          path: |
+            ${{ runner.temp }}/package-*.log
+          if-no-files-found: ignore
+          retention-days: 7
